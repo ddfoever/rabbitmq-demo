@@ -8,3 +8,7 @@ spring:
     virtual-host: /mq-vs
     username: root
     password: root
+    listener:
+      type: simple
+      simple:
+        acknowledge-mode: manual # 手动签收
