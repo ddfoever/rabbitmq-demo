@@ -40,15 +40,15 @@ public class ProducerTest {
     @Test
     public void testTtl(){
 
-        MessagePostProcessor processor = new MessagePostProcessor() {
-            @Override
-            public Message postProcessMessage(Message message) throws AmqpException {
-                message.getMessageProperties().setExpiration("5000");//设置单个消息的过期时间
-                return message;
-            }
-        };
+//        MessagePostProcessor processor = new MessagePostProcessor() {
+//            @Override
+//            public Message postProcessMessage(Message message) throws AmqpException {
+//                message.getMessageProperties().setExpiration("5000");//设置单个消息的过期时间
+//                return message;
+//            }
+//        };
         for(int i=1;i<=4;i++){
-            rabbitTemplate.convertAndSend(RabbitmqConfig.ACK_EXCHANGE_NAME,"ack.send.test","test messaage",processor);
+            rabbitTemplate.convertAndSend(RabbitmqConfig.ACK_EXCHANGE_NAME,"ack.send.test","test messaage");
 
         }
     }
@@ -85,6 +85,19 @@ public class ProducerTest {
 //        for(int i=1;i<=4;i++){
 //            rabbitTemplate.convertAndSend("test-dlx-exchange","test.dlx.queue","test dlx messaage");
 //
+//        }
+    }
+
+    /**
+     * 延迟队列的实现
+     * 发送消息
+     */
+    @Test
+    public void testDelay() throws InterruptedException {
+        rabbitTemplate.convertAndSend("order_exchange","order.pay","order send and waiting for payment....");
+//        for (int i = 10; i > 0; i--) {
+//            System.out.println("订单等待支付中.."+i+"s");
+//            Thread.sleep(1000);
 //        }
     }
 

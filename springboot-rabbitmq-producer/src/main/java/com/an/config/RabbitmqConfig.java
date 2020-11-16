@@ -111,6 +111,50 @@ public class RabbitmqConfig {
     }
 
 
+    /**
+     * 实现延迟队列---》30分钟订单未确认 就进行取消
+     * 步骤：1.定义订单的正常队列（order_queue）和交换机（order_exchange）
+     * 2. 创建死信队列（order_delay_queue）和交换机(order_delay_exchange)用于存放30分钟后未确认的订单消息
+     * 3. 正常队列绑定死信队列并且设置过期时间30min
+     */
+    //order 正常队列
+    @Bean("order_queue")
+    public Queue orderQueue(){
+        Map<String,Object> arguments = new HashMap<>();
+        arguments.put("x-dead-letter-exchange","order_delay_exchange");
+        arguments.put("x-dead-letter-routing-key","order.delay.pay");
+        arguments.put("x-message-ttl",10000);
+        return QueueBuilder.durable("order_queue").withArguments(arguments).build();
+    }
+    @Bean("order_exchange")
+    public Exchange orderExchange(){
+        return ExchangeBuilder.topicExchange("order_exchange").durable(true).build();
+    }
+
+    @Bean
+    public Binding bingdOrderExchange(@Qualifier("order_exchange") Exchange exchange,@Qualifier("order_queue") Queue queue){
+        return BindingBuilder.bind(queue).to(exchange).with("order.#").noargs();
+    }
+
+    /**
+     * order死信队列
+     */
+    @Bean("order_delay_queue")
+    public Queue orderDelayQueue(){
+        return QueueBuilder.durable("order_delay_queue").build();
+    }
+
+    @Bean("order_delay_exchange")
+    public Exchange orderDelayExchange(){
+        return ExchangeBuilder.topicExchange("order_delay_exchange").durable(true).build();
+    }
+
+    @Bean
+    public Binding bingdOrderDelayQueue(@Qualifier("order_delay_queue") Queue queue,@Qualifier("order_delay_exchange") Exchange exchange){
+        return BindingBuilder.bind(queue).to(exchange).with("order.delay.#").noargs();
+    }
+
+
 
 
 

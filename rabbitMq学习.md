@@ -357,11 +357,294 @@ public class WorkQueueProducer {
 
 通配符 *和#代替，*  * 代表一个单词，#代表一个或者多个
 
+### 5. 消息的可靠投递
+
+  ##### 5.1 生产端
+
+作为消息发送方希望任何时候杜绝消息的丢失和投递失败场景，Rabbitmq为我们提供了两种方式用来控制消息的投递可靠性模式。
+
++ **confirm模式**
++ **return模式**
+
+Rabbitmq 整个消息投递的路径为：
+
+**producer->rabbitmq broker->exchange->queue->consumer**
+
+> confirm 模式：message 从producer到exchange，则会返回一个comfirmCallback，无论投递成功与否，都会执行
+>
+> 开启confirm 模式  **publisher-comfirm=true**
+
+> return 模式：消息从exchange 到queue **投递失败**则会返回一个returnCallback（**注意只有失败才会**）
+>
+> return模式 步骤：
+>
+> 1. 开启回退模式  **publisher-returns=true**
+> 2. 设置ReturnCallBack 并且必须设置**channel.setMandatory(true)**，要不然不起作用
+> 3. 设置Exchange处理消息的模式(有2种)：
+>    - 如果消息没有路由到Queue，则丢弃消息（默认）
+>    - 如果消息没有路由到Queue，则返回给消息发送方ReturnCallBack
 
 
 
+##### 5.2 消费端
+
+**consumer Ack**  Ack 是指Acknowledge，确认。表示消费端收到消息后的确认方式。
+
+有三种确认方式：
+
+ + 自动确认：Acknowledge=none
+
+ + 手动确认：Ackknowledge=manual
+
+ + 根据异常情况确认：acknowledge=auto（这种方式使用麻烦，不做讲解）
+   一般要根据异常的类型来做处理（**重发还是处理丢弃**）
+
+   其中自动确认是指，当消息一旦到达消费端，则消息进行自动确认，rabbitmq server将会从queue将消息删除，不管你是消息处理成功与否。但是实际业务情况中，很可能消息接收到，业务处理异常，那么该消息就会丢失。如果设置了手动确认方式，则需要在业务处理成功后，手动调用channel.baiscAck(),手动签收，如果出现异常，则调用channel.basicNack()，让其自动重发消息。
+
+   
+
+   ```java
+       @RabbitListener(queues="ack_topic_queue")
+       public void getMessage(Message message, Channel channel) throws Exception {
+   
+           try {
+               System.out.println("message ack is received: "+message.toString());
+               int i = 4/0;
+               channel.basicAck(message.getMessageProperties().getDeliveryTag(),false);
+           } catch (Exception e) {
+               System.out.println("throw a exception, retry.......");
+               channel.basicNack(message.getMessageProperties().getDeliveryTag(),false,true);//第三个参数是requeue 是否返回队列，
+           }
+           System.out.println("dfd.................");
+   //        channel.basicAck(message.getMessageProperties().getDeliveryTag(),false);
+   
+       }
+   
+   ```
 
 
+##### 5.3 deliveryTag 消息标识码
+
+```java
+//当消费者向Rabbitmq 注册之后，Rabbitmq将通过basic.deliver方法投递消息给消费者，在每一次投递的消息体上，都会携带一个deliveryTag，这个值在每个通道上是唯一的，用来标识本次投递。
+//deliverTag是单调递增的正整数，64位长度，值从1开始，每次发送消息值递增1，最大值为9223372036854775807
+//消费者在收到消息后，向rabbitmq发送应答消息时，带上这个deliverTag，告诉rabbitmq 某次消息投递已经成功接收。
+```
+
+##### 5.4 批量确认
+
+手动确认方式也支持批量确认，这样可以显著减少网络流量。
+
+```java
+//手动确认是通过将multiple设置为true来实现，这样会对deliverTag以及比deliverTag 值小的消息一同批量确认
+```
+
+批量否定
+
+```java
+ channel.basicNack(message.getMessageProperties().getDeliveryTag(),false,true);//第三个参数是requeue 是否返回队列，如果为ture 则返回消息队列，重新发送给消费者，如果为false 则消息丢弃
+```
+
+channel.basicReject 只能否定单个消息，channel.basicNack可以批量否定
+
+```java
+basicReject(long deliveryTag, boolean requeue)
+basicNack(long deliveryTag, boolean multiple, boolean requeue) 
+```
+
+### 6. TLL延迟消息 /队列
+
+TTL  队列设置x-message-ttl有两种过期模式
+
++ 队列统一过期---》意思是队列中的所有消息到指定时间时，消息全部自动删除了。**通过设置x-message-ttl, 每个消息都会被标记为过期时间为x-message-ttl设置的时间，在经过指定的时间后，会从队列中自动删除**
+
++ 消息单独过期--
+
+  ```java
+      
+  //消息后处理对象
+  @Test
+      public void testTtl(){
+  
+          MessagePostProcessor processor = new MessagePostProcessor() {
+              @Override
+              public Message postProcessMessage(Message message) throws AmqpException {
+                  message.getMessageProperties().setExpiration("5000");//设置单个消息的过期时间
+                  return message;
+              }
+          };
+          for(int i=1;i<=4;i++){
+              rabbitTemplate.convertAndSend(RabbitmqConfig.ACK_EXCHANGE_NAME,"ack.send.test","test messaage",processor);
+  
+          }
+      }
+  ```
+
+  > 注意的是：队列的消息先过期时间短的消息
+
++ 队列过期---》通过设置auto-exprie，自动删除队列
+
+
+
+   **单个消息的过期的设置，如果这个消息没有在队列的顶端或者说它不是马上要被消费了， rabbitmq 不会启动过期时间，只有当这个消息在队列顶端了，设置的过期时间才会起作用。**
+
+### 7. 死信队列
+
+死信队列，英文缩写:DLX  ,dead letter exchange（死信交换机），当消息成为dead message之后，可以被重新发送到另一个交换机，这个交换机叫DLX.
+
+#### 7.1 死信队列的三种情况
+
++ 消息的长度超过队列的长度 ，队列长度10，第11个消息来的时候，就成为死信消息
++ 消费者拒绝签收消息，**channel.basicNack/channel.basicReject** ,但是消息没有返回到原来的队列中，设置了**requeue=false**,那么这样的消息就成为死信消息
++ **队列设置过期时间x-message-ttl**,消息在过期时间内没有被消费就成为死信消息。
+
+#### 7.2 队列绑定死信交换机
+
+​     给队列设置参数：x-dead-letter-exchange和x-dead-letter-routing-key 可以将dead message 路由到死信队列中区
+
+![image-20201113220259846](image-20201113220259846.png)
+
+
+
+#### 7.4 延迟队列实现（需要重点掌握）
+
+   ##### 7.4.1 什么是延迟队列
+
+      ```markdown
+延迟队列：即消息进入队列后不会立即被消费，只有达到**指定时间**后，才会被消费。
+
+      ```
+
+##### 7.4.2 场景
+
++ 订单超过半个小时后，未支付，取消订单，并且回滚库存
++ 新用户注册后成功7天后，发送短信问候
+
+```java
+//实现方式
+1. 定时器
+    缺点：定时器该设置多少秒区轮询呢，长的话时间会延迟，短的化影响性能。
+2. TTL+DLX(推荐使用)
+   
+```
+
+TTL+DLX 实现方式：
+
+![image-20201113221312349](image-20201113221312349.png)
+
+​    但是在Rabbitmq中没有延迟队列，不过我们可以使用<font color='red'>**TTL+DLX**</font>来实现这样的效果
+
+![image-20201113221942427](image-20201113221942427.png)
+
+```java
+
+```
+
+### 8. 消息追踪
+
+ ```java
+/**在使用任何消息中间件的过程中，难免会出现某条消息异常丢失的情况，对于Rabbitmq而言，可能是因为生产者或者消费者与Rabbitmq断开了连接，而它们与Rabbitmq又采用了不同的确认机制，也有可能是因为交换机与队列之间不同的转发策略，甚至是交换机并没有与任何队列进行绑定，生产者又感知不到或者没有采取相应的措施；另外Rabbitmq本身的集群策略也可能导致消息的丢失。这个时候就需要有一个较好的机制跟踪记录消息的投递过程，以此协助开发人员和运维人员进行问题定位。
+
+在Rabbitmq中可以使用Firehouse和rabbitmq_tracing插件功能来实现消息跟踪。
+
+ ```
+
+```markdown
+注意打开trace 会影响消息写入的功能，适当打开后请关闭
+rabbitmqctl trace_on: 开启firehouse 命令
+rabbtimqctl trace_off: 关闭firehouse 命令
+
+也可以使用rabbitmq 插件功能 rabbitmq-plugins enable rabbitmq-tracing
+可以在监控平台admin 页面使用。
+```
+
+### 9.Rabbitmq 消息应用问题
+
+#### 9.1 rabbitmq 消息可靠性保证
+
++ 消息补偿机制
+  ![image-20201115195150416](image-20201115195150416.png)
+
+#### 9.2消息幂等性保障
+
++ 乐观锁解决方案
+
++ 使用redis 的setnx
+
+  > setnx(key,value) 说明key不存在则插入成功且返回1，如果key存在，则不进行任何操作，返回0；
+
+
+
++ ![image-20201115201034134](image-20201115201034134.png)
+
+
+
+### 10.Rabbitmq 集群搭建
+
+ ```markdown
+Rabbimq天然支持Clustering，这使得Rabbitmq本身不需要像ActiveMq、Kafka那样通过zookeeper分别来实现HA方案和保存集群的元数据，集群是保证可靠性的一种方式，同时可以通过水平扩展以达到增加消息吞吐量能力的目的
+
+ ```
+
+![image-20201115205024103](image-20201115205024103.png)
+
+#### 10.1 Rabbitmq 单机多实例集群（镜像队列）
+
+  ```java
+1. rabbtimqctl status //查看rabbitmq的服务状态
+2. 第一步 停止rabbitmq 服务
+    service rabbitmq-server stop
+3. 启动第一个节点
+    RABBITMQ_NODE_PORT=5673 RABBITMQ_NODENAME=rabbit1 rabbitmq-server start
+    
+    启动第二个节点 
+
+  ```
+
+![image-20201115232756458](image-20201115232756458.png)
+
+
+
+ ```markdown
+注意一定要配置policy 同步消息到每个节点。
+ ```
+
+#### 10.2.负载均衡-HAProxy 安装搭建
+
+   配值haproxy.cg  ,配置统一出口
+
+
+
+### 11.Rabbitmq 常见应用问题
+
+#### 11.1 消息堆积
+
+​    当消息的生产速度大于消费速度，就会造成消息堆积
+
+1. 消息堆积影响
+   + 可能导致新消息无法进入队列
+   + 可能导致就消息无法丢失
+   + 消息等待的消费的时间过长，超出业务容忍范围
+2. 产生堆积的情况
+   + 生产者大量消息
+   + 消费者消费失败
+   + 消费者出现性能瓶颈
+   + 消费者挂了
+3. 解决办法
+   + 排查消费者消费性能
+   + 增加消费者
+   + 多线程消费
+4. 场景介绍
+
+#### 11.2 有序消费
+
+      1. 单个队列对应一个消费者
+         2. 内存队列 BlockingQueue
+
+#### 11.3 重复消费
+
+1. 通过cas 数据 版本号
+2. 通过redis存储id  ，通过setnx 来做操作判断
 
 
 
